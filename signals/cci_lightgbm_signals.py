@@ -129,6 +129,20 @@ def ic_filter(factors: pd.DataFrame, returns: pd.Series, threshold: float = 0.05
 
     return [k for k, v in ic_results.items() if abs(v) > threshold]
 
+def rolling_ic_filter(factors: pd.DataFrame, returns: pd.Series, threshold: float = 0.02, roll_window: int = 240) -> list:
+    """
+    Rolling IC 筛选 — 用滚动窗口 IC 中位数选因子，比单点 IC 更稳定。
+    roll_window: 滚动窗口大小（小时），默认 240h = 10天
+    """
+    ic_results = {}
+    for col in factors.columns:
+        valid = factors[col].notna() & returns.notna()
+        if valid.sum() > roll_window:
+            roll_ic = factors[col][valid].rolling(roll_window).corr(returns[valid])
+            median_ic = roll_ic.median()
+            if not np.isnan(median_ic):
+                ic_results[col] = median_ic
+    return [k for k, v in ic_results.items() if abs(v) > threshold]
 
 # ─────────────────────────────────────────────
 # 信号生成

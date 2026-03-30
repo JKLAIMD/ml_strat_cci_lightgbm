@@ -10,7 +10,7 @@ backtest.py — Walk-Forward 回测脚本
   FIX2: 真实交易次数 = 换仓次数 (position.diff().abs() == 2).sum() / 2
   FIX3: 手续费模型 - 每笔换仓扣 0.08% (开仓 0.04% + 平仓 0.04%)
   FIX4: 滑点模型 - 用 next_open 代替 close
-  FIX5: 删除 IC Filter，全量因子进 LightGBM
+  FIX5: Rolling IC Filter (240h窗口, threshold=0.02)
   FIX6: 非对称 threshold (默认 long=0.55, short=0.45)
   FIX7: proba 阈值网格化（多个 threshold 组合找最优）
 """
@@ -26,7 +26,7 @@ from datetime import datetime
 from itertools import product as iter_product
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from signals.cci_lightgbm_signals import build_factor_library
+from signals.cci_lightgbm_signals import build_factor_library, rolling_ic_filter
 from signals.asymmetric_proba_grid import positions_from_binary_proba_series
 
 
@@ -65,12 +65,16 @@ def walk_forward_backtest(df: pd.DataFrame, config: dict) -> pd.DataFrame:
         if len(train_df) < train_size * 0.8 or len(test_df) < test_size * 0.8:
             continue
 
-        # ---- 训练集：全量因子进 LightGBM（FIX5: 删除 IC Filter）----
-        all_factors = list(factors.columns)
+        # ---- 训练集：用 Rolling IC 选因子（比单点 IC 更稳定）----
         train_factors = factors.iloc[i * step_size:train_end]
         train_returns = returns.iloc[i * step_size:train_end]
 
-        X_train_df = train_factors[all_factors].dropna()
+        # Rolling IC filter: 240h 滚动窗口（10天），选 |median IC| > 0.02 的因子
+        good_factors = rolling_ic_filter(train_factors, train_returns, threshold=0.02, roll_window=240)
+        if len(good_factors) < 2:
+            continue
+
+        X_train_df = train_factors[good_factors].dropna()
         y_train = train_returns.loc[X_train_df.index]
         y_train = (y_train > 0).astype(int)
 
@@ -84,7 +88,7 @@ def walk_forward_backtest(df: pd.DataFrame, config: dict) -> pd.DataFrame:
 
         # ---- 测试集 ----
         test_factors = factors.iloc[train_end:test_end]
-        X_test = test_factors[all_factors].dropna()
+        X_test = test_factors[good_factors].dropna()
 
         proba = model.predict_proba(X_test)[:, 1]
         proba_series = pd.Series(proba, index=X_test.index)
@@ -108,14 +112,19 @@ def walk_forward_backtest(df: pd.DataFrame, config: dict) -> pd.DataFrame:
             # FIX2: 真实交易次数 = 换仓次数
             n_trades = int((position.diff().abs() == 2).sum() / 2)
 
-            # FIX3: 手续费模型 - 每笔换仓 0.08% (开仓 0.04% + 平仓 0.04%)
-            # 从 Sharpe 均值中扣除每 bar 均摊的费率损耗
+            # FIX3: 手续费模型 - 在换仓时刻扣除（不是每bar均摊）
+            # 每笔 round-trip = 开仓 0.04% + 平仓 0.04% = 0.08%
             fee_per_trade = 0.0004 * 2  # 0.08% per round-trip
-            fee_drag = n_trades * fee_per_trade / test_bars
+            # position_diff: 换仓时=2(开+平), 开仓时=1, 平时=0
+            position_diff = position.diff().abs()
+            position_diff.iloc[0] = position.abs().iloc[0]  # 第一根bar算开仓
+            # 每根 bar 扣除: fee * position_diff / 2 (每换仓一次扣0.08%，position_diff=2时扣全款)
+            bar_fee = fee_per_trade * position_diff / 2
+            net_returns = strategy_returns - bar_fee
 
             # FIX1: Sharpe 年化因子改用 sqrt(test_bars)
-            mean_ret = strategy_returns.mean() - fee_drag
-            std_ret = strategy_returns.std()
+            mean_ret = net_returns.mean()
+            std_ret = net_returns.std()
             sharpe = mean_ret / std_ret * np.sqrt(test_bars) if std_ret > 0 else 0
 
             mdd = (
@@ -130,7 +139,7 @@ def walk_forward_backtest(df: pd.DataFrame, config: dict) -> pd.DataFrame:
                 'train_start': train_df.index[0],
                 'test_start': test_df.index[0],
                 'test_end': test_df.index[-1],
-                'n_factors': len(all_factors),
+                'n_factors': len(good_factors),
                 'sharpe': sharpe,
                 'mdd': mdd,
                 'winrate': winrate,
