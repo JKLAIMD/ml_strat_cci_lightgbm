@@ -1,0 +1,50 @@
+# signal_server.yaml — 实时信号服务器配置
+# 用于 signal_notifier / super_grid_search 框架
+
+strategy:
+  name: cci_lightgbm
+  symbol: BTCUSDT
+  interval: 1h
+
+  # 核心因子配置
+  factors:
+    cci:
+      periods: [7, 14, 21]
+    stoch:
+      periods: [7]
+    atr:
+      period: 14
+
+  # LightGBM 模型推理
+  model:
+    path: models/lightgbm_cci_btc_1h.pkl
+    threshold: 0.5        # proba > 0.5 → 做多; proba < 0.5 → 做空
+    min_confidence: 0.55  # 低于此置信度不交易
+
+  # 风控参数
+  risk:
+    max_position_size: 0.95    # 单笔最大仓位（相对保证金）
+    leverage: 3                  # 杠杆倍数
+    stop_loss_atr_mult: 3.0     # ATR止损倍数
+    take_profit_atr_mult: 5.0    # ATR止盈倍数
+    max_daily_loss: 0.05        # 日内最大亏损（超过停止交易）
+
+  # 数据源
+  data_source:
+    exchange: binance
+    ws_endpoint: wss://stream.binance.com:9443/ws/btcusdt@kline_1h
+    rest_endpoint: https://api.binance.com/api/v3
+
+  # 信号推送
+  notifier:
+    enabled: true
+    discord_webhook: ${DISCORD_WEBHOOK}
+    telegram_bot_token: ${TELEGRAM_BOT_TOKEN}
+    telegram_chat_id: ${TELEGRAM_CHAT_ID}
+
+  # 模型重载（每周重新训练）
+  retrain:
+    enabled: true
+    schedule: "0 3 * * 0"   # 每周日 03:00 UTC
+    train_window_days: 90
+    min_pass_windows: 3      # 至少3个窗口 Sharpe>1.5 才启用新模型

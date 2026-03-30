@@ -1,0 +1,79 @@
+# walk_forward.yaml — Walk-Forward 回测配置
+
+backtest:
+  name: cci_lightgbm_walk_forward
+  symbol: BTCUSDT
+  interval: 1h
+  data_range:
+    start: "2024-01-01"
+    end: "2026-03-01"
+
+  # Walk-Forward 窗口配置
+  windows:
+    train_days: 90        # 3个月训练
+    test_days: 30         # 1个月测试
+    step_days: 30          # 滚动步进
+    min_test_windows: 3   # 至少3个窗口通过
+
+  # 因子库
+  factor_library:
+    price_factors:
+      - log_return: [5, 10, 20, 60]
+      - volatility: [5, 10, 20, 60]
+      - skewness: [20, 60]
+      - kurtosis: [20, 60]
+      - rolling_sharpe: [20, 60]
+
+    technical_factors:
+      - RSI: [7, 14, 21]
+      - stoch_k: [7, 14, 21]
+      - stoch_d: [7, 14, 21]
+      - CCI: [7, 14, 21]
+      - ADX: [7, 14, 21]
+      - ATR: [14]
+
+    bollinger_factors:
+      - bb_upper: [10, 20]
+      - bb_lower: [10, 20]
+      - bb_width: [10, 20]
+      - bb_pctb: [10, 20]
+
+    macd_factors:
+      - macd: [12, 26, 9]
+      - macd_signal: [12, 26, 9]
+      - macd_hist: [12, 26, 9]
+
+    volume_factors:
+      - volume_ratio: [5]
+      - obv_ma10: []
+
+    time_factors:
+      - hour_of_day: []
+      - day_of_week: []
+
+  # IC 筛选
+  ic_filter:
+    enabled: true
+    threshold: 0.05       # |IC| > 0.05
+    min_ic_windows: 10     # 至少10个窗口有稳定IC
+
+  # 风控参数（Walk-Forward 时固定不变）
+  risk:
+    leverage: 3
+    stop_loss_pct: 0.03   # 3% 固定止损（Walk-Forward 用）
+    # 注：实盘用 ATR 动态止损，这里简化用固定止损
+
+  # 通过标准
+  pass_criteria:
+    sharpe_threshold: 1.5
+    max_mdd: 0.30
+    min_winrate: 0.45
+    min_pass_windows: 3
+    min_pass_rate: 0.30   # 至少30%窗口通过
+
+  # 输出
+  output:
+    results_dir: backtest/results/
+    save_trades: true
+    save_equity_curve: true
+    generate_html_report: true

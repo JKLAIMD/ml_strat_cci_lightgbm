@@ -1,0 +1,43 @@
+# lightgbm_model.yaml — LightGBM 模型配置
+
+model:
+  name: cci_lightgbm
+  version: "2026-03-30"
+  description: "CCI + Stoch RSI LightGBM Classifier for BTC 1h"
+
+  # 模型超参数
+  params:
+    n_estimators: 100
+    max_depth: 5
+    learning_rate: 0.05
+    num_leaves: 31
+    min_child_samples: 20
+    subsample: 0.8
+    colsample_bytree: 0.8
+    random_state: 42
+
+  # 训练配置
+  training:
+    train_window_days: 90     # 训练窗口 90天
+    test_window_days: 30       # 测试窗口 30天
+    step_days: 30              # 滚动步进 30天
+    min_pass_windows: 3        # 最少通过窗口数
+
+  # 目标变量
+  target:
+    type: classification
+    horizon: 1                # 预测下1根K线
+    positive: "price_up"       # 标签：未来收益>0
+
+  # 预测阈值
+  inference:
+    threshold: 0.5            # 默认阈值
+    use_adaptive_threshold: true
+    adaptive_window: 20        # 用过去20天动态调整阈值
+
+# Walk-Forward 验证基准
+walk_forward_benchmark:
+  sharpe_threshold: 1.5      # Sharpe > 1.5 算通过
+  max_mdd_threshold: 0.30     # MDD < 30%
+  min_winrate: 0.50           # 胜率 > 50%
+  avg_sharpe_target: 2.0      # 平均 Sharpe 目标
