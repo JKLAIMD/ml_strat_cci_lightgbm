@@ -20,7 +20,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from signals.asymmetric_proba_grid import positions_from_binary_proba_series, validate_binary_thresholds
-from signals.cci_lightgbm_signals import build_factor_library, ic_filter
+from signals.cci_lightgbm_signals import build_factor_library
 
 
 def _parse_grid(s: str) -> list[float]:
@@ -39,7 +39,6 @@ def walk_forward_proba_grid(
     train_days = config["backtest"]["windows"]["train_days"]
     test_days = config["backtest"]["windows"]["test_days"]
     step_days = config["backtest"]["windows"]["step_days"]
-    ic_thresh = config["backtest"]["ic_filter"]["threshold"]
 
     pairs: list[tuple[float, float]] = []
     for lo, sh in itertools.product(long_grid, short_grid):
@@ -71,14 +70,12 @@ def walk_forward_proba_grid(
         if len(train_df) < train_size * 0.8 or len(test_df) < test_size * 0.8:
             continue
 
+        # FIX5: 全量因子进 LightGBM（删除 IC Filter）
+        all_factors = list(factors.columns)
         train_factors = factors.iloc[i * step_size : train_end]
         train_returns = returns.iloc[i * step_size : train_end]
-        good_factors = ic_filter(train_factors, train_returns, threshold=ic_thresh)
 
-        if len(good_factors) < 2:
-            continue
-
-        X_train = train_factors[good_factors].dropna()
+        X_train = train_factors[all_factors].dropna()
         y_train = train_returns.loc[X_train.index]
         y_train = (y_train > 0).astype(int)
 
@@ -97,21 +94,34 @@ def walk_forward_proba_grid(
         model.fit(X_train, y_train)
 
         test_factors = factors.iloc[train_end:test_end]
-        X_test = test_factors[good_factors].dropna()
-        test_close = df["close"].loc[X_test.index]
+        X_test = test_factors[all_factors].dropna()
+
+        # FIX4: 用 next_open 计算收益（滑点模型）
         proba = model.predict_proba(X_test)[:, 1]
         proba_series = pd.Series(proba, index=X_test.index)
 
         for long_thr, short_thr in pairs:
             position = positions_from_binary_proba_series(proba_series, long_thr, short_thr)
-            strategy_returns = position * test_close.pct_change().fillna(0)
-            strategy_returns = strategy_returns[1:]
+            next_close = df["close"].shift(-1).loc[position.index]
+            current_close = df["close"].loc[position.index]
+            strategy_returns = position * (next_close / current_close - 1).fillna(0)
 
-            sharpe = (
-                strategy_returns.mean() / strategy_returns.std() * np.sqrt(24 * 365)
-                if strategy_returns.std() > 0
-                else 0
-            )
+            test_bars = len(strategy_returns)
+            if test_bars == 0:
+                continue
+
+            # FIX2: 真实交易次数
+            n_trades = int((position.diff().abs() == 2).sum() / 2)
+
+            # FIX3: 手续费模型 - 每笔换仓 0.08%
+            fee_per_trade = 0.0004 * 2
+            fee_drag = n_trades * fee_per_trade / test_bars
+
+            # FIX1: Sharpe 年化因子改用 sqrt(test_bars)
+            mean_ret = strategy_returns.mean() - fee_drag
+            std_ret = strategy_returns.std()
+            sharpe = mean_ret / std_ret * np.sqrt(test_bars) if std_ret > 0 else 0
+
             mdd = (strategy_returns.cumsum() - strategy_returns.cumsum().cummax()).min()
             winrate = (strategy_returns > 0).mean() if len(strategy_returns) else 0
 
@@ -123,11 +133,12 @@ def walk_forward_proba_grid(
                     "train_start": train_df.index[0],
                     "test_start": test_df.index[0],
                     "test_end": test_df.index[-1],
-                    "n_factors": len(good_factors),
+                    "n_factors": len(all_factors),
                     "sharpe": sharpe,
                     "mdd": mdd,
                     "winrate": winrate,
-                    "n_bars": len(position),
+                    "n_trades": n_trades,
+                    "n_bars": test_bars,
                 }
             )
 
