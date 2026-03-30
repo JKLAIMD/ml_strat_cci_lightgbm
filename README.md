@@ -21,12 +21,14 @@ ml_strat_cci_lightgbm/
 │   ├── signal_server.yaml
 │   ├── walk_forward.yaml       # Walk-Forward 回测配置（backtest 脚本使用）
 │   └── lightgbm_model.yaml
+├── data/                       # 放 btc_1h.csv / eth_1h.csv（脚本生成，见下）
 ├── backtest/
 │   └── walk_forward_results.md
 ├── signals/
 │   ├── cci_lightgbm_signals.py   # 信号生成器
 │   └── asymmetric_proba_grid.py # 非对称 proba 阈值（网格/实盘共用）
 └── scripts/
+    ├── fetch_ohlcv_for_backtest.py     # 从 Binance 现货拉 1h OHLCV 到 data/
     ├── train.py                        # 模型训练脚本
     ├── backtest.py                     # Walk-Forward 回测（固定 0.5 切分）
     ├── backtest_proba_threshold_grid.py  # Walk-Forward + (long,short) 阈值网格
@@ -43,34 +45,47 @@ ml_strat_cci_lightgbm/
 pip install lightgbm pandas numpy scikit-learn ta
 ```
 
-### 2. 训练模型
+### 2. 下载回测用 K 线（BTC + ETH，1h）
+
+从 Binance **现货** 分页拉取，时间范围默认与 `config/walk_forward.yaml` 里 `data_range` 一致（约两年多，条数与回测需要匹配）。
+
 ```bash
-python scripts/train.py --data btc_1h.csv --output models/
+pip install pandas pyyaml
+python scripts/fetch_ohlcv_for_backtest.py
 ```
 
-### 3. 跑 Walk-Forward 回测
+若拉取超时：本机需能访问 Binance（常需 VPN）；或在 PowerShell 设置 `$env:HTTPS_PROXY="http://127.0.0.1:7890"` 后重试。不要用 `ping https://...`，应 `ping api.binance.com`。
+
+输出：`data/btc_1h.csv`、`data/eth_1h.csv`。仅需 BTC 时：`--symbols btc`。自定义区间：`--start 2023-01-01 --end 2026-03-01`。
+
+### 3. 训练模型
 ```bash
-python scripts/backtest.py --config config/walk_forward.yaml
+python scripts/train.py --data data/btc_1h.csv --output models/
 ```
 
-### 4. 启动实时信号服务器
+### 4. 跑 Walk-Forward 回测
+```bash
+python scripts/backtest.py --config config/walk_forward.yaml --data data/btc_1h.csv
+```
+
+### 5. 启动实时信号服务器
 ```bash
 python scripts/live_server.py --config config/signal_server.yaml
 ```
 
-### 5. 非对称 Proba 阈值网格回测（Walk-Forward）
+### 6. 非对称 Proba 阈值网格回测（Walk-Forward）
 
 在 **二元 proba**（涨概率）上使用多组 `(long_thr, short_thr)`，例如 `long>0.6` 做多、`proba<0.4` 做空，中间为中性。需 `pyyaml`。
 
 ```bash
 pip install pyyaml
-python scripts/backtest_proba_threshold_grid.py --config config/walk_forward.yaml --data btc_1h.csv \
+python scripts/backtest_proba_threshold_grid.py --config config/walk_forward.yaml --data data/btc_1h.csv \
   --long-grid 0.55,0.6,0.65 --short-grid 0.35,0.4,0.45 --output backtest/results/
 ```
 
 结果：`backtest/results/proba_grid_walk_forward.csv`。
 
-### 6. ML 实盘交易进程（Binance USDT 永续）
+### 7. ML 实盘交易进程（Binance USDT 永续）
 
 独立脚本，**不**依赖 `signal_notifier-main/first_trading_server.py`。信号来自 `c3_ml_signal_asymmetric`（三分类：`p_up` / `p_down` 与非对称阈值）。
 

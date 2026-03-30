@@ -60,7 +60,7 @@ def build_factor_library(df: pd.DataFrame) -> pd.DataFrame:
         deltap = high.diff()
         deltam = -low.diff()
         plus_dm = deltap.where((deltap > deltam) & (deltap > 0), 0)
-        minus_dm = deltam.where((deltab > deltap) & (deltam > 0), 0)
+        minus_dm = deltam.where((deltam > deltap) & (deltam > 0), 0)
         tr1 = high - low
         tr2 = abs(high - close.shift(1))
         tr3 = abs(low - close.shift(1))

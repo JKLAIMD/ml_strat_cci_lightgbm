@@ -115,7 +115,7 @@ def main():
     parser.add_argument('--output', default='backtest/results/')
     args = parser.parse_args()
 
-    with open(args.config) as f:
+    with open(args.config, encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
     print(f"Loading data: {args.data}")
